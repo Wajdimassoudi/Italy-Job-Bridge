@@ -23,6 +23,7 @@ interface Stats {
   sent: number;
   failed: number;
   isRunning: boolean;
+  hasCV?: boolean;
   logs: string[];
 }
 
@@ -41,6 +42,7 @@ export default function App() {
     logs: []
   });
   const [file, setFile] = useState<File | null>(null);
+  const [cvLoading, setCvLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [industry, setIndustry] = useState("Agriculture");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -53,8 +55,14 @@ export default function App() {
       try {
         const res = await fetch("/api/status");
         if (res.ok) {
-          const data = await res.json();
-          setStats(data);
+          const contentType = res.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            const data = await res.json();
+            setStats(data);
+          } else {
+            const text = await res.text();
+            console.warn("Received non-JSON response from /api/status:", text.substring(0, 100));
+          }
         } else {
           console.warn(`Status check returned ${res.status}: ${res.statusText}`);
         }
@@ -89,8 +97,33 @@ export default function App() {
     }
   };
 
+  const startSending = async () => {
+    try {
+      const res = await fetch("/api/start", { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || "Start failed");
+      }
+    } catch (err) {
+      alert("Error starting engine");
+    }
+  };
+
   const stopSending = async () => {
     await fetch("/api/stop", { method: "POST" });
+  };
+
+  const handleCvUpload = async (file: File) => {
+    setCvLoading(true);
+    const formData = new FormData();
+    formData.append("cv", file);
+    try {
+      await fetch("/api/upload-cv", { method: "POST", body: formData });
+    } catch (err) {
+      alert("CV upload failed");
+    } finally {
+      setCvLoading(false);
+    }
   };
 
   const discoverCompanies = async () => {
@@ -173,34 +206,72 @@ export default function App() {
             <h2 className="text-[10px] uppercase font-bold text-gray-500 tracking-widest flex items-center gap-2">
               <Upload className="w-3 h-3" /> Configuration
             </h2>
-            <div className="space-y-3">
-              <form onSubmit={handleFileUpload} className="space-y-3">
-                <label className="relative flex items-center justify-center w-full py-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-md text-xs transition-colors cursor-pointer text-gray-300">
+            <div className="space-y-4">
+              {/* CV Section */}
+              <div className="space-y-2">
+                <label className="text-[10px] text-gray-500 font-bold uppercase block">1. Attach CV (PDF)</label>
+                <label className={cn(
+                  "relative flex items-center justify-center w-full py-3 border rounded-md text-xs transition-all cursor-pointer",
+                  stats.hasCV ? "bg-indigo-900/20 border-indigo-500 text-indigo-300" : "bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300"
+                )}>
                   <input 
                     type="file" 
-                    accept=".csv"
-                    onChange={(e) => setFile(e.target.files?.[0] || null)}
+                    accept=".pdf"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleCvUpload(f);
+                    }}
                     className="absolute inset-0 opacity-0 cursor-pointer"
                   />
-                  <FileText className="w-4 h-4 mr-2" />
-                  <span>{file ? file.name : "Select targets.csv"}</span>
+                  {cvLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileText className="w-4 h-4 mr-2" />}
+                  <span>{stats.hasCV ? "CV Attached & Ready" : "Upload CV PDF"}</span>
                 </label>
-                
+              </div>
+
+              {/* Targets Section */}
+              <div className="space-y-2">
+                <label className="text-[10px] text-gray-500 font-bold uppercase block">2. Target List (CSV)</label>
+                <form onSubmit={handleFileUpload} className="space-y-3">
+                  <label className="relative flex items-center justify-center w-full py-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-md text-xs transition-colors cursor-pointer text-gray-300">
+                    <input 
+                      type="file" 
+                      accept=".csv"
+                      onChange={(e) => setFile(e.target.files?.[0] || null)}
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                    />
+                    <Upload className="w-4 h-4 mr-2" />
+                    <span>{file ? file.name : "Select targets.csv"}</span>
+                  </label>
+                  
+                  <button
+                    disabled={!file || stats.isRunning || loading}
+                    className="w-full py-3 bg-indigo-600/20 border border-indigo-500/50 hover:bg-indigo-600/30 text-indigo-300 rounded-lg font-bold transition-all uppercase text-[10px] tracking-widest"
+                  >
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : "Upload Targets"}
+                  </button>
+                </form>
+              </div>
+
+              {/* Engine Controls */}
+              <div className="space-y-3 pt-4 border-t border-gray-800">
                 <button
-                  disabled={!file || stats.isRunning || loading}
+                  onClick={startSending}
+                  disabled={stats.isRunning || stats.total === 0}
                   className="w-full py-4 bg-green-600 hover:bg-green-700 disabled:bg-gray-800 disabled:text-gray-600 text-white rounded-lg font-bold shadow-lg shadow-green-900/20 flex items-center justify-center space-x-3 transition-all uppercase text-sm tracking-widest"
                 >
-                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <span>Launch Engine</span>}
+                  <div className={cn("w-2 h-2 rounded-full bg-white", stats.isRunning && "animate-ping")} />
+                  <span>START BOT ENGINE</span>
                 </button>
-              </form>
 
-              <button
-                onClick={stopSending}
-                disabled={!stats.isRunning}
-                className="w-full py-4 bg-red-600/10 border border-red-900/50 hover:bg-red-900/20 text-red-400 disabled:opacity-0 rounded-lg font-bold transition-all text-sm tracking-widest"
-              >
-                STOP SESSIONS
-              </button>
+                <button
+                  type="button"
+                  onClick={stopSending}
+                  disabled={!stats.isRunning}
+                  className="w-full py-4 bg-red-600/10 border border-red-900/50 hover:bg-red-900/20 text-red-400 disabled:opacity-0 rounded-lg font-bold transition-all text-sm tracking-widest"
+                >
+                  STOP SESSIONS
+                </button>
+              </div>
             </div>
           </div>
 

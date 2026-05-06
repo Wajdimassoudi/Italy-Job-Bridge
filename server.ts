@@ -26,6 +26,8 @@ let queueStats = {
   sent: 0,
   failed: 0,
   isRunning: false,
+  cvBuffer: null as Buffer | null,
+  cvName: null as string | null,
   logs: [] as string[]
 };
 
@@ -33,25 +35,32 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 async function startServer() {
   const app = express();
+  console.log(`[DEBUG] Starting server in ${process.env.NODE_ENV || "development"} mode`);
+  
   app.use(express.json());
 
-  // --- API Routes ---
+  // API Router FIRST to avoid conflicts
+  const apiRouter = express.Router();
 
-  // Get current status
-  app.get("/api/status", (req, res) => {
-    res.json(queueStats);
+  apiRouter.get("/status", (req, res) => {
+    res.json({
+      ...queueStats,
+      hasCV: !!queueStats.cvBuffer,
+      cvBuffer: undefined // Don't send buffer to client
+    });
   });
 
-  // Stop sending
-  app.post("/api/stop", (req, res) => {
-    emailQueue.clear();
-    queueStats.isRunning = false;
-    addLog("Sending stopped by user.");
-    res.json({ message: "Stopped" });
+  apiRouter.post("/upload-cv", upload.single("cv"), (req: any, res) => {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    queueStats.cvBuffer = req.file.buffer;
+    queueStats.cvName = req.file.originalname;
+    addLog(`CV attached: ${req.file.originalname}`);
+    res.json({ message: "CV uploaded" });
   });
 
-  // Upload and process CSV
-  app.post("/api/upload", upload.single("file"), async (req: any, res) => {
+  let storedRecords: any[] = [];
+
+  apiRouter.post("/upload", upload.single("file"), async (req: any, res) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     
     try {
@@ -60,33 +69,44 @@ async function startServer() {
         skip_empty_lines: true
       });
 
-      if (queueStats.isRunning) {
-        return res.status(400).json({ error: "Queue is already running" });
-      }
-
+      storedRecords = records;
       queueStats.total = records.length;
       queueStats.sent = 0;
       queueStats.failed = 0;
-      queueStats.isRunning = true;
       queueStats.logs = [];
-      addLog(`File uploaded. Found ${records.length} companies.`);
-
-      // Add to queue
-      records.forEach((record: any, index: number) => {
-        emailQueue.add(async () => {
-          if (!queueStats.isRunning) return;
-          await processEmailTask(record, index);
-        });
-      });
-
-      res.json({ message: "Upload successful, sending started." });
+      addLog(`File uploaded. Ready to process ${records.length} companies.`);
+      res.json({ message: "Upload successful, click Start to begin." });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // Discovery Route (Suggest companies)
-  app.post("/api/discover", async (req, res) => {
+  apiRouter.post("/start", (req, res) => {
+    if (queueStats.isRunning) return res.status(400).json({ error: "Already running" });
+    if (storedRecords.length === 0) return res.status(400).json({ error: "No targets loaded" });
+
+    queueStats.isRunning = true;
+    addLog("Bot Engine Started.");
+
+    // Add remaining tasks to queue
+    storedRecords.forEach((record: any, index: number) => {
+      emailQueue.add(async () => {
+        if (!queueStats.isRunning) return;
+        await processEmailTask(record, index);
+      });
+    });
+
+    res.json({ message: "Bot started" });
+  });
+
+  apiRouter.post("/stop", (req, res) => {
+    emailQueue.clear();
+    queueStats.isRunning = false;
+    addLog("Bot Engine Stopped.");
+    res.json({ message: "Stopped" });
+  });
+
+  apiRouter.post("/discover", async (req, res) => {
     const { industry } = req.body;
     try {
       const prompt = `Act as a professional recruiter. List 10 real types of companies or specific regions in Italy for ${industry} work (agriculture, factory, labor). 
@@ -101,7 +121,12 @@ async function startServer() {
     }
   });
 
-  // --- Helper Functions ---
+  app.use("/api", apiRouter);
+
+  // Logging middleware for non-API routes (optional)
+  app.use((req, res, next) => {
+    next();
+  });
 
   function addLog(msg: string) {
     const time = new Date().toLocaleTimeString();
@@ -180,12 +205,21 @@ async function startServer() {
       }
     });
 
-    await transporter.sendMail({
+    const mailOptions: any = {
       from: process.env.GMAIL_USER,
       to,
       subject,
       text
-    });
+    };
+
+    if (queueStats.cvBuffer && queueStats.cvName) {
+      mailOptions.attachments = [{
+        filename: queueStats.cvName,
+        content: queueStats.cvBuffer
+      }];
+    }
+
+    await transporter.sendMail(mailOptions);
   }
 
   // --- Vite Setup ---
