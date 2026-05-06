@@ -28,9 +28,9 @@ interface Stats {
 }
 
 interface Suggestion {
+  email: string;
   company_name: string;
   region: string;
-  description: string;
 }
 
 export default function App() {
@@ -46,6 +46,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [industry, setIndustry] = useState("Agriculture");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [selectedLeads, setSelectedLeads] = useState<string[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -59,12 +60,7 @@ export default function App() {
           if (contentType && contentType.includes("application/json")) {
             const data = await res.json();
             setStats(data);
-          } else {
-            const text = await res.text();
-            console.warn("Received non-JSON response from /api/status:", text.substring(0, 100));
           }
-        } else {
-          console.warn(`Status check returned ${res.status}: ${res.statusText}`);
         }
       } catch (err) {
         console.error("Status check connection error:", err);
@@ -86,7 +82,9 @@ export default function App() {
         method: "POST",
         body: formData,
       });
-      if (!res.ok) {
+      if (res.ok) {
+        setFile(null);
+      } else {
         const data = await res.json();
         alert(data.error || "Upload failed");
       }
@@ -113,6 +111,10 @@ export default function App() {
     await fetch("/api/stop", { method: "POST" });
   };
 
+  const clearTargets = async () => {
+    await fetch("/api/clear-targets", { method: "POST" });
+  };
+
   const handleCvUpload = async (file: File) => {
     setCvLoading(true);
     const formData = new FormData();
@@ -137,12 +139,36 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setSuggestions(data);
+        setSelectedLeads(data.map((s: Suggestion) => s.email));
       }
     } catch (err) {
       console.error("Discovery failed");
     } finally {
       setDiscoveryLoading(false);
     }
+  };
+
+  const addLeadsToTargets = async () => {
+    const leadsToAdd = suggestions.filter(s => selectedLeads.includes(s.email));
+    if (leadsToAdd.length === 0) return;
+
+    try {
+      await fetch("/api/load-targets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targets: leadsToAdd }),
+      });
+      setSuggestions([]);
+      setSelectedLeads([]);
+    } catch (err) {
+      alert("Failed to add leads");
+    }
+  };
+
+  const toggleLead = (email: string) => {
+    setSelectedLeads(prev => 
+      prev.includes(email) ? prev.filter(e => e !== email) : [...prev, email]
+    );
   };
 
   const downloadSample = () => {
@@ -277,39 +303,71 @@ export default function App() {
 
           {/* Discovery Integration */}
           <div className="space-y-4">
-            <h2 className="text-[10px] uppercase font-bold text-gray-500 tracking-widest flex items-center gap-2">
-              <Search className="w-3 h-3" /> Industry Leads
-            </h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-[10px] uppercase font-bold text-gray-500 tracking-widest flex items-center gap-2">
+                <Search className="w-3 h-3" /> Industry Leads
+              </h2>
+              {suggestions.length > 0 && (
+                <button 
+                  onClick={addLeadsToTargets}
+                  className="text-[9px] bg-indigo-600/20 text-indigo-400 px-2 py-0.5 rounded border border-indigo-500/30 hover:bg-indigo-600/30 transition-colors font-bold"
+                >
+                  ADD ({selectedLeads.length})
+                </button>
+              )}
+            </div>
+            
             <div className="flex gap-2">
               <select 
                 value={industry} 
                 onChange={(e) => setIndustry(e.target.value)}
-                className="flex-1 bg-card-bg border border-border-subtle rounded-md px-3 py-2 text-xs text-gray-300 outline-none"
+                className="flex-1 bg-card-bg border border-border-subtle rounded-md px-3 py-2 text-xs text-gray-300 outline-none focus:border-indigo-500 transition-colors"
               >
                 <option>Agriculture</option>
                 <option>Factory</option>
                 <option>Construction</option>
-                <option>Logistic</option>
+                <option>Logistics</option>
+                <option>Hospitality</option>
               </select>
               <button 
                 onClick={discoverCompanies}
                 disabled={discoveryLoading}
-                className="bg-gray-800 p-2 rounded-md hover:bg-gray-700 text-indigo-400"
+                className="bg-gray-800 p-2 rounded-md hover:bg-gray-700 text-indigo-400 disabled:opacity-50"
               >
                 {discoveryLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
               </button>
             </div>
             
-            <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-2">
+            <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar pr-2">
               {suggestions.map((s, i) => (
-                <div key={i} className="p-3 bg-card-bg border border-border-subtle rounded-md">
-                  <div className="flex justify-between text-[10px] items-center">
-                    <span className="font-bold text-gray-200">{s.company_name}</span>
-                    <span className="text-indigo-400">{s.region}</span>
+                <div 
+                  key={i} 
+                  onClick={() => toggleLead(s.email)}
+                  className={cn(
+                    "p-3 rounded-md border cursor-pointer transition-all",
+                    selectedLeads.includes(s.email) 
+                      ? "bg-indigo-900/20 border-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.1)]" 
+                      : "bg-card-bg border-border-subtle hover:border-gray-600"
+                  )}
+                >
+                  <div className="flex justify-between text-[10px] items-center mb-1">
+                    <span className={cn(
+                      "font-bold truncate pr-2",
+                      selectedLeads.includes(s.email) ? "text-indigo-300" : "text-gray-200"
+                    )}>{s.company_name}</span>
+                    <span className="text-gray-500 shrink-0">{s.region}</span>
                   </div>
-                  <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{s.description}</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] text-indigo-400 font-mono truncate">{s.email}</p>
+                    {selectedLeads.includes(s.email) && <CheckCircle2 className="w-3 h-3 text-indigo-400 shrink-0" />}
+                  </div>
                 </div>
               ))}
+              {suggestions.length === 0 && !discoveryLoading && (
+                <div className="text-center py-8 border border-dashed border-gray-800 rounded-lg">
+                  <p className="text-[9px] text-gray-600 uppercase tracking-widest p-2">Search to find AI-verified job leads</p>
+                </div>
+              )}
             </div>
           </div>
         </aside>
@@ -324,6 +382,8 @@ export default function App() {
               value={`${stats.sent}`}
               subValue={`/ ${stats.total}`}
               progress={(stats.sent / stats.total) * 100}
+              onClear={clearTargets}
+              showClear={!stats.isRunning && stats.total > 0}
             />
             <StatBoardCard 
               label="Failure Rate" 
@@ -400,10 +460,15 @@ export default function App() {
   );
 }
 
-function StatBoardCard({ label, value, subValue, progress, color = "text-white" }: { label: string, value: string, subValue?: string, progress?: number, color?: string }) {
+function StatBoardCard({ label, value, subValue, progress, color = "text-white", onClear, showClear }: { label: string, value: string, subValue?: string, progress?: number, color?: string, onClear?: () => void, showClear?: boolean }) {
   return (
-    <div className="bg-card-bg border border-border-subtle p-5 rounded-xl flex flex-col space-y-1 shadow-md group border cursor-default hover:border-gray-700 transition-colors">
-      <span className="text-[10px] uppercase font-bold text-gray-500 tracking-widest">{label}</span>
+    <div className="bg-card-bg border border-border-subtle p-5 rounded-xl flex flex-col space-y-1 shadow-md group border cursor-default hover:border-gray-700 transition-colors relative overflow-hidden">
+      <div className="flex justify-between items-start">
+        <span className="text-[10px] uppercase font-bold text-gray-500 tracking-widest">{label}</span>
+        {showClear && onClear && (
+          <button onClick={onClear} className="text-[9px] text-red-500 hover:text-red-400 font-bold uppercase transition-colors">Clear</button>
+        )}
+      </div>
       <span className={cn("text-3xl font-light tracking-tight", color)}>
         {value} {subValue && <span className="text-sm text-gray-500">{subValue}</span>}
       </span>
