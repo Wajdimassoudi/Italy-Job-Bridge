@@ -39,8 +39,8 @@ async function startServer() {
   
   app.use(express.json());
 
-  // API Router FIRST to avoid conflicts
   const apiRouter = express.Router();
+  app.use("/api", apiRouter);
 
   apiRouter.get("/status", (req, res) => {
     res.json({
@@ -106,6 +106,10 @@ async function startServer() {
     res.json({ message: "Stopped" });
   });
 
+  apiRouter.get("/health", (req, res) => {
+    res.json({ status: "ok", time: new Date().toISOString() });
+  });
+
   apiRouter.post("/discover", async (req, res) => {
     const { industry } = req.body;
     try {
@@ -121,8 +125,6 @@ async function startServer() {
     }
   });
 
-  app.use("/api", apiRouter);
-
   // Logging middleware for non-API routes (optional)
   app.use((req, res, next) => {
     next();
@@ -134,9 +136,12 @@ async function startServer() {
     queueStats.logs.unshift(fullMsg);
     if (queueStats.logs.length > 50) queueStats.logs.pop();
     
-    // Write to file
-    fs.appendFileSync(LOG_FILE, fullMsg + "\n");
     console.log(fullMsg);
+    try {
+      fs.appendFileSync(LOG_FILE, fullMsg + "\n");
+    } catch (e) {
+      console.warn("Could not write to log file", e);
+    }
   }
 
   async function generatePersonalizedEmail(companyName: string) {
