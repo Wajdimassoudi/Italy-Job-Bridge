@@ -255,8 +255,40 @@ export default function App() {
               </div>
 
               {/* Targets Section */}
-              <div className="space-y-2">
-                <label className="text-[10px] text-gray-500 font-bold uppercase block">2. Target List (CSV)</label>
+              <div className="space-y-4 pt-4 border-t border-gray-800">
+                <label className="text-[10px] text-gray-500 font-bold uppercase block">2. Target List</label>
+                
+                {/* PDF to CSV Option */}
+                <div className="space-y-2">
+                  <p className="text-[9px] text-indigo-400 font-bold uppercase tracking-wider italic">Convert PDF to target list (AI)</p>
+                  <label className="relative flex items-center justify-center w-full py-2 bg-indigo-900/10 hover:bg-indigo-900/20 border border-indigo-500/30 rounded-md text-xs transition-colors cursor-pointer text-indigo-300">
+                    <input 
+                      type="file" 
+                      accept=".pdf"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        setLoading(true);
+                        const formData = new FormData();
+                        formData.append("file", f);
+                        try {
+                          await fetch("/api/upload-pdf-targets", { method: "POST", body: formData });
+                        } catch (err) {
+                          alert("PDF processing failed");
+                        } finally {
+                          setLoading(false);
+                          e.target.value = "";
+                        }
+                      }}
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Search className="w-3 h-3" />
+                      <span>{loading ? "Analyzing PDF..." : "Extract from PDF"}</span>
+                    </div>
+                  </label>
+                </div>
+
                 <form onSubmit={handleFileUpload} className="space-y-3">
                   <label className="relative flex items-center justify-center w-full py-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-md text-xs transition-colors cursor-pointer text-gray-300">
                     <input 

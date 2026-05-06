@@ -25,6 +25,7 @@
     "multer": "^2.1.1",
     "nodemailer": "^8.0.7",
     "p-queue": "^9.2.0",
+    "pdf-parse": "^2.4.5",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "tailwind-merge": "^3.5.0",

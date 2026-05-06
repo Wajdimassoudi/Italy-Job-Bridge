@@ -8,6 +8,10 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import nodemailer from "nodemailer";
 import PQueue from "p-queue";
 import fs from "fs";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const pdf = require("pdf-parse");
 
 // Constants
 const PORT = 3000;
@@ -123,6 +127,66 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: "Discovery failed" });
     }
+  });
+
+  apiRouter.post("/upload-pdf-targets", upload.single("file"), async (req: any, res) => {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    
+    try {
+      addLog(`Parsing PDF targets...`);
+      const data = await pdf(req.file.buffer);
+      const text = data.text;
+
+      const prompt = `
+        Act as a data entry specialist. Extract a list of companies and their recruitment emails from the following text.
+        Text: """${text}"""
+        
+        Rules:
+        1. Look for Italian company names and emails (ending in .it or general business emails).
+        2. Format as a JSON array of objects: [{ "email": "...", "company_name": "...", "region": "..." }].
+        3. If you find no clear emails, do not make them up.
+        4. Only output the JSON.
+      `;
+
+      const result = await model.generateContent(prompt);
+      const cleanedText = result.response.text().replace(/```json|```/g, "").trim();
+      const records = JSON.parse(cleanedText);
+
+      storedRecords = [...storedRecords, ...records];
+      // Deduplicate
+      const uniqueMap = new Map();
+      storedRecords.forEach(r => uniqueMap.set(r.email, r));
+      storedRecords = Array.from(uniqueMap.values());
+
+      queueStats.total = storedRecords.length;
+      addLog(`PDF Analyzed. Total unique targets now: ${storedRecords.length}`);
+      res.json({ message: "PDF processed and added to targets" });
+    } catch (err: any) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to process PDF targets" });
+    }
+  });
+
+  apiRouter.post("/load-targets", (req, res) => {
+    const { targets } = req.body;
+    if (!targets || !Array.isArray(targets)) return res.status(400).json({ error: "Invalid targets" });
+
+    const uniqueMap = new Map();
+    [...storedRecords, ...targets].forEach(r => uniqueMap.set(r.email, r));
+    storedRecords = Array.from(uniqueMap.values());
+    
+    queueStats.total = storedRecords.length;
+    addLog(`Added ${targets.length} leads. Total targets: ${storedRecords.length}`);
+    res.json({ message: "Leads added" });
+  });
+
+  apiRouter.post("/clear-targets", (req, res) => {
+    storedRecords = [];
+    queueStats.total = 0;
+    queueStats.sent = 0;
+    queueStats.failed = 0;
+    addLog("Target list cleared.");
+    res.json({ message: "Targets cleared" });
   });
 
   // Logging middleware for non-API routes (optional)
